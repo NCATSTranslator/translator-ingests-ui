@@ -4,6 +4,8 @@ A website for browsing and downloading KGX (Knowledge Graph Exchange) files from
 
 Live site: https://kgx-storage.ci.transltr.io
 
+Repo: https://github.com/NCATSTranslator/translator-ingests-ui
+
 ## Summary
 
 KGX Storage is a small web app. It lets anyone browse and download KGX files from the S3 bucket called `kgx-translator-ingests`. The data is built by a different repo (translator-ingests). This repo is only the website.
@@ -31,7 +33,7 @@ This server gives people HTTP access to KGX files from the NCATS Biomedical Data
 
 The pipeline that creates the data is in the translator-ingests repo. This repo is just the web interface. That way the data pipeline and the website can be updated separately.
 
-Data pipeline code: https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage/src/translator_ingest/util/storage
+Data pipeline code: https://github.com/NCATSTranslator/translator-ingests/tree/main/src/translator_ingest/util/storage
 
 ## Features
 
@@ -82,7 +84,7 @@ Software on the server:
 
 ```bash
 cd /home/ubuntu
-git clone https://github.com/RTXteam/kgx-storage.git kgx-storage-webserver
+git clone https://github.com/NCATSTranslator/translator-ingests-ui.git kgx-storage-webserver
 cd kgx-storage-webserver
 ```
 
@@ -323,7 +325,7 @@ No write actions. Credentials come from the instance metadata, not from the code
 To run the app locally without Nginx or systemd:
 
 ```bash
-cd kgx-storage
+cd translator-ingests-ui
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -411,7 +413,7 @@ Use the canonical URL format for any reference to kgx-storage files: path only (
 
 ## Related repos
 
-Translator-ingests (pipeline that writes the data): https://github.com/NCATSTranslator/translator-ingests/tree/kgx_storage
+Translator-ingests (pipeline that writes the data): https://github.com/NCATSTranslator/translator-ingests
 
 ## Security
 

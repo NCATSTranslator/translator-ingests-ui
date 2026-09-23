@@ -1,6 +1,6 @@
 [Unit]
 Description=KGX Storage Web Server
-Documentation=https://github.com/RTXteam/kgx-storage
+Documentation=https://github.com/NCATSTranslator/translator-ingests-ui
 After=network.target network-online.target
 Wants=network-online.target
 

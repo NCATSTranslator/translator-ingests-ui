@@ -790,7 +790,7 @@ HTML_TEMPLATE = """
                 <p>This interface provides access to KGX (Knowledge Graph Exchange) format outputs stored in the S3 bucket for the NCATS Biomedical Data Translator project. Browse and download knowledge graph data files including nodes, edges, and metadata from various biomedical data sources processed through the Translator Ingests pipeline.</p>
                 <div class="footer-links">
                     <a href="/docs">File Access Documentation</a> • 
-                    <a href="https://github.com/NCATSTranslator/translator-ingests" target="_blank">View Source Code on GitHub</a>
+                    <a href="https://github.com/NCATSTranslator/translator-ingests-ui" target="_blank">View Source Code on GitHub</a>
                 </div>
             </div>
         </div>
