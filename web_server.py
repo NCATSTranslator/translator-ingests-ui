@@ -16,6 +16,7 @@ from pathlib import Path
 
 from metrics_path_rules import exclude_key_for_folder_modified_date
 from release_dates import DISPLAY_FORMAT, release_date_for_prefix
+from metrics_refresh import refresh_seconds, start_refresher
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
@@ -27,16 +28,20 @@ TRANSLATOR_KG_OPEN_PATH = "releases/translator_kg_open"
 
 # Load precomputed metrics
 _metrics_data = {}
+_metrics_computed_at = None
+_metrics_mtime = None
 
 
 def load_metrics():
     """Load precomputed metrics from JSON file."""
-    global _metrics_data
+    global _metrics_data, _metrics_computed_at, _metrics_mtime
     try:
         if METRICS_FILE.exists():
             with open(METRICS_FILE, "r") as f:
                 data = json.load(f)
                 _metrics_data = data.get("metrics", {})
+                _metrics_computed_at = data.get("computed_at")
+                _metrics_mtime = METRICS_FILE.stat().st_mtime
                 print(f"Loaded metrics for {len(_metrics_data)} folders (computed at {data.get('computed_at', 'unknown')})")
         else:
             print(f"Warning: Metrics file not found at {METRICS_FILE}")
@@ -46,8 +51,19 @@ def load_metrics():
         _metrics_data = {}
 
 
-# Load metrics on startup
+def reload_metrics_if_changed():
+    """Reload metrics.json when something has rewritten it since the last load."""
+    try:
+        mtime = METRICS_FILE.stat().st_mtime
+    except OSError:
+        return
+    if mtime != _metrics_mtime:
+        load_metrics()
+
+
+# Load metrics on startup, then keep them fresh in the background
 load_metrics()
+start_refresher(METRICS_FILE, refresh_seconds(os.environ))
 
 # Minimal HTML for 404 (file/prefix not found or reserved path)
 NOT_FOUND_HTML = (
@@ -125,6 +141,7 @@ def get_folder_stats(prefix):
 
 def list_directory(prefix=""):
     """List contents of a directory (prefix) in S3."""
+    reload_metrics_if_changed()
     folders = []
     files = []
 
@@ -324,7 +341,12 @@ def health():
     try:
         # Simple check - verify S3 client exists and metrics are loaded
         if S3_CLIENT and len(_metrics_data) > 0:
-            return {"status": "healthy", "service": "kgx-storage", "metrics_loaded": len(_metrics_data)}, 200
+            return {
+                "status": "healthy",
+                "service": "kgx-storage",
+                "metrics_loaded": len(_metrics_data),
+                "metrics_computed_at": _metrics_computed_at,
+            }, 200
         else:
             return {"status": "healthy", "service": "kgx-storage"}, 200
     except Exception as e:

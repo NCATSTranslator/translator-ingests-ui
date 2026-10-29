@@ -139,8 +139,14 @@ def archive_and_prune_metrics() -> Path | None:
     return archive_path
 
 
-def compute_all_metrics():
-    """Compute metrics for all folders and save to JSON file."""
+def compute_all_metrics(verbose: bool = True) -> dict[str, dict[str, object]]:
+    """
+    Compute metrics for all folders and save to JSON file.
+
+    Pass verbose=False to leave out the per folder progress, which is worth
+    reading when the script is run by hand and is only noise in the log of a
+    server refreshing in the background.
+    """
     print(f"Starting metric computation at {datetime.now()}")
     print(f"Bucket: {BUCKET_NAME}")
 
@@ -154,13 +160,14 @@ def compute_all_metrics():
     total = len(folders)
 
     for idx, folder in enumerate(folders, 1):
-        print(f"[{idx}/{total}] Processing: {folder}")
+        if verbose:
+            print(f"[{idx}/{total}] Processing: {folder}")
         stats = get_folder_stats(folder)
         if stats:
             metrics[folder] = stats
 
         # Progress update every 10 folders
-        if idx % 10 == 0:
+        if verbose and idx % 10 == 0:
             print(f"Progress: {idx}/{total} ({idx/total*100:.1f}%)")
 
     # Add metadata
