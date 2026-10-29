@@ -4,6 +4,8 @@ Web server for browsing and downloading S3 bucket contents.
 Run this on the EC2 instance to serve files via https://kgx-storage.ci.transltr.io
 """
 
+import threading
+
 import boto3
 import json
 import os
@@ -28,31 +30,41 @@ TRANSLATOR_KG_OPEN_PATH = "releases/translator_kg_open"
 
 # Load precomputed metrics
 _metrics_data = {}
-_metrics_computed_at = None
-_metrics_mtime = None
+# Module state the loader replaces, not constants, which is how _metrics_data is kept too.
+# pylint: disable-next=invalid-name
+_metrics_computed_at: str | None = None
+# pylint: disable-next=invalid-name
+_metrics_mtime: float | None = None
+
+# Listing requests reload on their own thread, so one load at a time. Two loads running
+# together can publish in the order new data, old data, old mtime, new mtime, which leaves
+# the old metrics stored under the new file's mtime and nothing left to trigger a reload.
+_metrics_lock = threading.Lock()
 
 
 def load_metrics():
     """Load precomputed metrics from JSON file."""
     global _metrics_data, _metrics_computed_at, _metrics_mtime
-    try:
-        if METRICS_FILE.exists():
-            with open(METRICS_FILE, "r") as f:
-                data = json.load(f)
-                # The mtime of the open file, not of the path: a refresh can replace the
-                # file between the read and the stat, and the mtime of the one that
-                # replaced it would make this stale copy look current forever.
-                file_mtime = os.fstat(f.fileno()).st_mtime
-                _metrics_data = data.get("metrics", {})
-                _metrics_computed_at = data.get("computed_at")
-                _metrics_mtime = file_mtime
-                print(f"Loaded metrics for {len(_metrics_data)} folders (computed at {data.get('computed_at', 'unknown')})")
-        else:
-            print(f"Warning: Metrics file not found at {METRICS_FILE}")
-            print("Run 'python compute_metrics.py' to generate metrics for faster performance")
-    except Exception as e:
-        print(f"Error loading metrics: {e}")
-        _metrics_data = {}
+    with _metrics_lock:
+        try:
+            if METRICS_FILE.exists():
+                with open(METRICS_FILE, "r") as f:
+                    data = json.load(f)
+                    # The mtime of the open file, not of the path: a refresh can replace the
+                    # file between the read and the stat, and the mtime of the one that
+                    # replaced it would make this stale copy look current forever.
+                    file_mtime = os.fstat(f.fileno()).st_mtime
+                    _metrics_data = data.get("metrics", {})
+                    _metrics_computed_at = data.get("computed_at")
+                    _metrics_mtime = file_mtime
+                    print(f"Loaded metrics for {len(_metrics_data)} folders "
+                          f"(computed at {data.get('computed_at', 'unknown')})")
+            else:
+                print(f"Warning: Metrics file not found at {METRICS_FILE}")
+                print("Run 'python compute_metrics.py' to generate metrics for faster performance")
+        except Exception as e:
+            print(f"Error loading metrics: {e}")
+            _metrics_data = {}
 
 
 def reload_metrics_if_changed():
