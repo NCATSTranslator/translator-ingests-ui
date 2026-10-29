@@ -39,9 +39,13 @@ def load_metrics():
         if METRICS_FILE.exists():
             with open(METRICS_FILE, "r") as f:
                 data = json.load(f)
+                # The mtime of the open file, not of the path: a refresh can replace the
+                # file between the read and the stat, and the mtime of the one that
+                # replaced it would make this stale copy look current forever.
+                file_mtime = os.fstat(f.fileno()).st_mtime
                 _metrics_data = data.get("metrics", {})
                 _metrics_computed_at = data.get("computed_at")
-                _metrics_mtime = METRICS_FILE.stat().st_mtime
+                _metrics_mtime = file_mtime
                 print(f"Loaded metrics for {len(_metrics_data)} folders (computed at {data.get('computed_at', 'unknown')})")
         else:
             print(f"Warning: Metrics file not found at {METRICS_FILE}")

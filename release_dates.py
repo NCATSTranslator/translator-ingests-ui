@@ -32,9 +32,10 @@ _METADATA_DATE_FIELDS: tuple[tuple[str, str], ...] = (
 _RELEASE_VERSION_PREFIX = re.compile(r"^releases/[^/]+/([^/]+)/$")
 
 # Releases made before semantic versioning are named after their date.
-_DATE_VERSION = re.compile(r"^(\d{4})_(\d{2})_(\d{2})$")
+DATE_VERSION_FORMAT = "%Y_%m_%d"
 
 DISPLAY_FORMAT = "%Y-%m-%d %H:%M"
+DATE_ONLY_FORMAT = "%Y-%m-%d"
 
 
 def release_version_from_prefix(prefix: str) -> str | None:
@@ -65,7 +66,15 @@ def format_release_date(value: str | None) -> str | None:
     '2026-09-04 22:58'
     >>> format_release_date("2026_07_05")
     '2026-07-05'
+
+    A date that no calendar has holds no date, so it falls through to the next
+    place the release records one rather than being displayed as it stands.
+
     >>> format_release_date("1.0.0") is None
+    True
+    >>> format_release_date("2026_99_99") is None
+    True
+    >>> format_release_date("2026_02_30") is None
     True
     >>> format_release_date("") is None
     True
@@ -74,9 +83,10 @@ def format_release_date(value: str | None) -> str | None:
     """
     if not value:
         return None
-    date_version = _DATE_VERSION.match(value)
-    if date_version:
-        return "-".join(date_version.groups())
+    try:
+        return datetime.strptime(value, DATE_VERSION_FORMAT).strftime(DATE_ONLY_FORMAT)
+    except ValueError:
+        pass
     try:
         return datetime.fromisoformat(value).strftime(DISPLAY_FORMAT)
     except ValueError:
@@ -97,6 +107,8 @@ def release_date_from_metadata(metadata_json: bytes | str | None, field: str) ->
     True
     >>> release_date_from_metadata("not json", "release_date") is None
     True
+    >>> release_date_from_metadata('{"release_date": 20260904}', "release_date") is None
+    True
     """
     if metadata_json is None:
         return None
@@ -106,7 +118,9 @@ def release_date_from_metadata(metadata_json: bytes | str | None, field: str) ->
         return None
     if not isinstance(metadata, dict):
         return None
-    return format_release_date(metadata.get(field))
+    # Metadata is whatever the file holds, so a field that is not text records no date.
+    recorded = metadata.get(field)
+    return format_release_date(recorded) if isinstance(recorded, str) else None
 
 
 def _read_object(s3_client: BaseClient, bucket: str, key: str) -> bytes | None:

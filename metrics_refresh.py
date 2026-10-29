@@ -7,7 +7,7 @@ computed elsewhere, or none at all. The web server starts one background
 refresher that recomputes them once they are older than the refresh interval.
 
 Gunicorn runs several workers and every worker imports the app, so the
-refresher takes a lock file and only the worker holding it recomputes. The
+refresher locks a file and only the worker holding the lock recomputes. The
 workers that do not hold it pick up the new file the next time they serve a
 listing, because the server reloads metrics.json whenever its mtime changes.
 That also covers a metrics.json written by cron or by hand.
@@ -18,10 +18,11 @@ host where cron already refreshes the file.
 
 from __future__ import annotations
 
-import os
+import fcntl
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from compute_metrics import compute_all_metrics
@@ -29,8 +30,6 @@ from compute_metrics import compute_all_metrics
 DEFAULT_REFRESH_SECONDS = 6 * 60 * 60
 ENV_REFRESH_SECONDS = "METRICS_REFRESH_SECONDS"
 
-# A refresh killed before it released the lock must not block every later one.
-LOCK_STALE_SECONDS = 2 * 60 * 60
 LOCK_SUFFIX = ".refresh.lock"
 
 # How often the refresher wakes up to compare the file's age against the interval.
@@ -96,69 +95,69 @@ def file_age_seconds(path: Path, now: float) -> float | None:
         return None
 
 
-def claim_refresh(lock_path: Path, now: float) -> bool:
+@contextmanager
+def refresh_lock(lock_path: Path) -> Iterator[bool]:
     """
-    Return True if this process may refresh, taking over a lock left behind stale.
+    Hold the refresh lock for the length of the block, or yield False if a worker already holds it.
 
-    The lock is a file created exclusively, so exactly one process wins the race.
+    The lock is an advisory lock on the file rather than the existence of the
+    file, so the kernel drops it when the process holding it exits, however it
+    exits. A lock file left behind by a killed worker therefore blocks nothing,
+    and a refresh that takes longer than expected keeps its lock for as long as
+    it runs instead of having it taken away.
 
-    >>> import tempfile, time
+    >>> import tempfile
     >>> with tempfile.TemporaryDirectory() as folder:
     ...     lock = Path(folder) / ("metrics.json" + LOCK_SUFFIX)
-    ...     mine = claim_refresh(lock, time.time())
-    ...     theirs = claim_refresh(lock, time.time())
-    ...     (mine, theirs)
+    ...     with refresh_lock(lock) as mine, refresh_lock(lock) as theirs:
+    ...         (mine, theirs)
     (True, False)
 
-    A lock older than LOCK_STALE_SECONDS is taken over, so a refresh that was
-    killed before it released the lock cannot block every refresh after it.
+    Leaving the block releases the lock, so the next refresh can take it.
 
     >>> with tempfile.TemporaryDirectory() as folder:
     ...     lock = Path(folder) / ("metrics.json" + LOCK_SUFFIX)
-    ...     held = claim_refresh(lock, time.time())
-    ...     os.utime(lock, (0, 0))
-    ...     claim_refresh(lock, time.time())  # doctest: +ELLIPSIS
-    Taking over a metrics refresh lock left behind ...s ago
-    True
+    ...     with refresh_lock(lock) as first:
+    ...         pass
+    ...     with refresh_lock(lock) as second:
+    ...         (first, second)
+    (True, True)
     """
     try:
-        os.close(os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-        return True
-    except FileExistsError:
-        pass
+        lock_file = lock_path.open("w")
     except OSError as error:
         print(f"Cannot write the metrics refresh lock at {lock_path}: {error}")
-        return False
-
-    age = file_age_seconds(lock_path, now)
-    if age is None or age < LOCK_STALE_SECONDS:
-        return False
-    print(f"Taking over a metrics refresh lock left behind {age:.0f}s ago")
-    lock_path.unlink(missing_ok=True)
-    try:
-        os.close(os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-    except OSError:
-        return False
-    return True
+        yield False
+        return
+    with lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
 
 
 def _refresh_when_stale(metrics_file: Path, lock_path: Path, interval_seconds: int) -> None:
     """Recompute the statistics once, if they are stale and no other worker is on it."""
     if not needs_refresh(file_age_seconds(metrics_file, time.time()), interval_seconds):
         return
-    if not claim_refresh(lock_path, time.time()):
-        return
-    try:
+    with refresh_lock(lock_path) as locked:
+        if not locked:
+            return
         print(f"Refreshing {metrics_file} because it is older than {interval_seconds}s")
         compute_all_metrics(verbose=False)
-    finally:
-        lock_path.unlink(missing_ok=True)
 
 
 def _refresh_loop(metrics_file: Path, lock_path: Path, interval_seconds: int) -> None:
     """Check the age of the statistics forever, recomputing them when they age out."""
     while True:
-        _refresh_when_stale(metrics_file, lock_path, interval_seconds)
+        try:
+            _refresh_when_stale(metrics_file, lock_path, interval_seconds)
+        # Broad on purpose: a refresher that dies never refreshes again, so one unreadable
+        # metadata file or one S3 error must not stop every refresh after it.
+        except Exception as error:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+            print(f"Metrics refresh failed, trying again in {POLL_SECONDS}s: {error!r}")
         time.sleep(POLL_SECONDS)
 
 
