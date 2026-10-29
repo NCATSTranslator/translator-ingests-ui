@@ -24,6 +24,7 @@ Important paths:
 - Logs: `/var/log/kgx-storage/` (access.log and error.log)
 - Nginx config: copy `nginx-config` from the repo to `/etc/nginx/sites-available/kgx-storage`
 - The metrics cache is `metrics.json` in the app folder. The script `compute_metrics.py` creates it. The script `update_metrics.sh` can run in cron to refresh it and tell Gunicorn to reload.
+- A folder under `releases/<graph>/<version>/` shows the date the release itself records, read from `release-metadata.json` or `graph-metadata.json`. Every other folder shows the newest LastModified under it, which S3 resets on every upload.
 
 Setup in short: Clone the repo. Make a Python venv and install from requirements.txt. Run `sudo ./setup-webserver-service.sh`. Set up Nginx using the repo’s nginx-config. Run certbot for kgx-storage.ci.transltr.io. Run `compute_metrics.py` once so the site has folder stats. Optionally add a cron job for `update_metrics.sh`. The EC2 instance needs an IAM role that can read from S3, and the domain must point to the instance’s IP.
 
@@ -178,6 +179,7 @@ What’s in the repo:
 
 - `web_server.py` – Flask app. Routes, S3 calls, and the HTML for the browser, JSON viewer, and docs live here.
 - `compute_metrics.py` – Script that scans the bucket and writes folder stats to `metrics.json`.
+- `release_dates.py` – Reads the real date of a release from its metadata, so a re-upload does not change the date a release folder shows.
 - `update_metrics.sh` – Runs compute_metrics.py and sends HUP to Gunicorn so workers reload. Use in cron.
 - `metrics.json` – Created by compute_metrics.py. Not in git. Makes folder listing fast.
 - `requirements.txt` – Python dependencies (pinned versions).

@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 from pathlib import Path
 
 from metrics_path_rules import exclude_key_for_folder_modified_date
+from release_dates import DISPLAY_FORMAT, release_date_for_prefix
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
@@ -110,12 +111,15 @@ def get_folder_stats(prefix):
                     latest_modified_display = lm
 
     chosen_modified = latest_modified_display or latest_modified_all
+    last_modified = chosen_modified.strftime(DISPLAY_FORMAT) if chosen_modified else "-"
 
     return {
         "size": total_size,
         "size_display": format_size(total_size),
         "file_count": file_count,
-        "modified": chosen_modified.strftime("%Y-%m-%d %H:%M") if chosen_modified else "-"
+        # A release folder reports the date its own metadata records, because
+        # re-uploading an unchanged release moves LastModified to the re-upload.
+        "modified": release_date_for_prefix(S3_CLIENT, BUCKET_NAME, prefix) or last_modified
     }
 
 
