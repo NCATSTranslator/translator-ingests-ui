@@ -17,7 +17,7 @@ import re
 from datetime import datetime
 
 from botocore.client import BaseClient
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 RELEASE_METADATA_FILENAME = "release-metadata.json"
 GRAPH_METADATA_FILENAME = "graph-metadata.json"
@@ -124,13 +124,28 @@ def release_date_from_metadata(metadata_json: bytes | str | None, field: str) ->
 
 
 def _read_object(s3_client: BaseClient, bucket: str, key: str) -> bytes | None:
-    """Return the body of an S3 object, or None if it cannot be read."""
+    """
+    Return the body of an S3 object, or None if it cannot be read.
+
+    Reading the body is part of reading the object, because the request can
+    succeed and the body still arrive short. Either way the caller has no
+    metadata from this file and goes on to the next place a date is recorded.
+
+    >>> class TruncatedBody:
+    ...     def read(self):
+    ...         raise BotoCoreError()
+    >>> class Truncated:
+    ...     def get_object(self, Bucket, Key):
+    ...         return {"Body": TruncatedBody()}
+    >>> _read_object(Truncated(), "bucket", "key") is None
+    True
+    """
     try:
         # boto3 generates client methods at runtime, so type checkers cannot see get_object.
         response = s3_client.get_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
-    except ClientError:
+        body: bytes = response["Body"].read()
+    except (ClientError, BotoCoreError):
         return None
-    body: bytes = response["Body"].read()
     return body
 
 

@@ -178,13 +178,18 @@ def compute_all_metrics(verbose: bool = True) -> dict[str, dict[str, object]]:
         "metrics": metrics
     }
 
-    # Save to JSON file (atomic write)
-    temp_file = METRICS_FILE.with_suffix(".tmp")
-    with open(temp_file, "w") as f:
-        json.dump(output, f, indent=2)
+    # Save to JSON file (atomic write). The temporary file is named after this process, because
+    # the server refreshes in the background now: a run started by hand or by cron at the same
+    # time would otherwise write into the same temporary file and publish a half written one.
+    temp_file = METRICS_FILE.with_name(f"{METRICS_FILE.name}.{os.getpid()}.tmp")
+    try:
+        with open(temp_file, "w") as f:
+            json.dump(output, f, indent=2)
 
-    # Atomic rename
-    temp_file.replace(METRICS_FILE)
+        # Atomic rename
+        temp_file.replace(METRICS_FILE)
+    finally:
+        temp_file.unlink(missing_ok=True)
 
     archived = archive_and_prune_metrics()
     if archived:
