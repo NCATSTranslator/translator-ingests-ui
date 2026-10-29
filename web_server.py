@@ -118,9 +118,11 @@ def get_folder_stats(prefix):
 
     Falls back to live S3 API call if metrics not available.
     """
-    # Try precomputed metrics first
-    if prefix in _metrics_data:
-        return _metrics_data[prefix]
+    # Try precomputed metrics first. One read, not a membership test and an index:
+    # another request can reload the cache between the two and the index would raise.
+    cached = _metrics_data.get(prefix)
+    if cached is not None:
+        return cached
 
     # Fallback to live S3 API call (slow path)
     print(f"Warning: No precomputed metrics for {prefix}, falling back to S3 API")

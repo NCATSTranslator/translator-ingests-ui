@@ -44,7 +44,7 @@ def format_size(size_bytes):
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def get_folder_stats(prefix):
+def get_folder_stats(prefix, verbose: bool = True):
     """Calculate total size and file count for a folder."""
     paginator = S3_CLIENT.get_paginator("list_objects_v2")
     total_size = 0
@@ -65,7 +65,10 @@ def get_folder_stats(prefix):
                     if latest_modified_display is None or lm > latest_modified_display:
                         latest_modified_display = lm
     except Exception as e:
-        print(f"Error processing {prefix}: {e}")
+        # Only when asked: a background refresh of a bucket S3 is refusing would otherwise
+        # put one line per folder into the log. compute_all_metrics reports the count.
+        if verbose:
+            print(f"Error processing {prefix}: {e}")
         return None
 
     chosen_modified = latest_modified_display or latest_modified_all
@@ -129,7 +132,14 @@ def archive_and_prune_metrics() -> Path | None:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     archive_path = METRICS_FILE.parent / f"metrics-{stamp}.json"
-    shutil.copy2(METRICS_FILE, archive_path)
+    # Staged under this process's own name, because the stamp is only accurate to the second:
+    # two writers in the same second would otherwise copy into one file at once.
+    staged = archive_path.with_name(f"{archive_path.name}.{os.getpid()}.staging")
+    try:
+        shutil.copy2(METRICS_FILE, staged)
+        staged.replace(archive_path)
+    finally:
+        staged.unlink(missing_ok=True)
 
     parent = METRICS_FILE.parent
     archives = _list_metrics_archives(parent)
@@ -162,13 +172,18 @@ def compute_all_metrics(verbose: bool = True) -> dict[str, dict[str, object]]:
     for idx, folder in enumerate(folders, 1):
         if verbose:
             print(f"[{idx}/{total}] Processing: {folder}")
-        stats = get_folder_stats(folder)
+        stats = get_folder_stats(folder, verbose=verbose)
         if stats:
             metrics[folder] = stats
 
         # Progress update every 10 folders
         if verbose and idx % 10 == 0:
             print(f"Progress: {idx}/{total} ({idx/total*100:.1f}%)")
+
+    failed = total - len(metrics)
+    if failed:
+        print(f"{failed} of {total} folders could not be scanned, so they are not in the cache. "
+              f"Run compute_metrics.py by hand to see why.")
 
     # Add metadata
     output = {
