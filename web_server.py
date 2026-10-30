@@ -18,7 +18,6 @@ from pathlib import Path
 
 from metrics_path_rules import exclude_key_for_folder_modified_date
 from release_dates import DISPLAY_FORMAT, release_date_for_prefix
-from metrics_refresh import refresh_seconds, start_refresher
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
@@ -50,9 +49,9 @@ def load_metrics():
             if METRICS_FILE.exists():
                 with open(METRICS_FILE, "r") as f:
                     data = json.load(f)
-                    # The mtime of the open file, not of the path: a refresh can replace the
-                    # file between the read and the stat, and the mtime of the one that
-                    # replaced it would make this stale copy look current forever.
+                    # The mtime of the open file, not of the path: compute_metrics.py can
+                    # replace the file between the read and the stat, and the mtime of the
+                    # one that replaced it would make this stale copy look current forever.
                     file_mtime = os.fstat(f.fileno()).st_mtime
                     _metrics_data = data.get("metrics", {})
                     _metrics_computed_at = data.get("computed_at")
@@ -77,9 +76,9 @@ def reload_metrics_if_changed():
         load_metrics()
 
 
-# Load metrics on startup, then keep them fresh in the background
+# Load metrics on startup. Whoever recomputes them replaces metrics.json, and the next
+# listing request picks the new file up, so nothing here has to recompute on a timer.
 load_metrics()
-start_refresher(METRICS_FILE, refresh_seconds(os.environ))
 
 # Minimal HTML for 404 (file/prefix not found or reserved path)
 NOT_FOUND_HTML = (

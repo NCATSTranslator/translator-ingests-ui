@@ -44,7 +44,7 @@ def format_size(size_bytes):
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def get_folder_stats(prefix, verbose: bool = True):
+def get_folder_stats(prefix):
     """Calculate total size and file count for a folder."""
     paginator = S3_CLIENT.get_paginator("list_objects_v2")
     total_size = 0
@@ -65,10 +65,7 @@ def get_folder_stats(prefix, verbose: bool = True):
                     if latest_modified_display is None or lm > latest_modified_display:
                         latest_modified_display = lm
     except Exception as e:
-        # Only when asked: a background refresh of a bucket S3 is refusing would otherwise
-        # put one line per folder into the log. compute_all_metrics reports the count.
-        if verbose:
-            print(f"Error processing {prefix}: {e}")
+        print(f"Error processing {prefix}: {e}")
         return None
 
     chosen_modified = latest_modified_display or latest_modified_all
@@ -149,14 +146,8 @@ def archive_and_prune_metrics() -> Path | None:
     return archive_path
 
 
-def compute_all_metrics(verbose: bool = True) -> dict[str, dict[str, object]]:
-    """
-    Compute metrics for all folders and save to JSON file.
-
-    Pass verbose=False to leave out the per folder progress, which is worth
-    reading when the script is run by hand and is only noise in the log of a
-    server refreshing in the background.
-    """
+def compute_all_metrics() -> dict[str, dict[str, object]]:
+    """Compute metrics for all folders and save to JSON file."""
     print(f"Starting metric computation at {datetime.now()}")
     print(f"Bucket: {BUCKET_NAME}")
 
@@ -170,14 +161,13 @@ def compute_all_metrics(verbose: bool = True) -> dict[str, dict[str, object]]:
     total = len(folders)
 
     for idx, folder in enumerate(folders, 1):
-        if verbose:
-            print(f"[{idx}/{total}] Processing: {folder}")
-        stats = get_folder_stats(folder, verbose=verbose)
+        print(f"[{idx}/{total}] Processing: {folder}")
+        stats = get_folder_stats(folder)
         if stats:
             metrics[folder] = stats
 
         # Progress update every 10 folders
-        if verbose and idx % 10 == 0:
+        if idx % 10 == 0:
             print(f"Progress: {idx}/{total} ({idx/total*100:.1f}%)")
 
     failed = total - len(metrics)
@@ -193,9 +183,9 @@ def compute_all_metrics(verbose: bool = True) -> dict[str, dict[str, object]]:
         "metrics": metrics
     }
 
-    # Save to JSON file (atomic write). The temporary file is named after this process, because
-    # the server refreshes in the background now: a run started by hand or by cron at the same
-    # time would otherwise write into the same temporary file and publish a half written one.
+    # Save to JSON file (atomic write). The temporary file is named after this process: a run
+    # started by hand while cron is running one would otherwise write into the same temporary
+    # file, and the web server would read a half written one.
     temp_file = METRICS_FILE.with_name(f"{METRICS_FILE.name}.{os.getpid()}.tmp")
     try:
         with open(temp_file, "w") as f:
