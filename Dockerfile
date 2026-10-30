@@ -32,6 +32,8 @@ COPY --from=builder /root/.local /home/appuser/.local
 COPY --chown=appuser:appuser web_server.py .
 COPY --chown=appuser:appuser compute_metrics.py .
 COPY --chown=appuser:appuser metrics_path_rules.py .
+COPY --chown=appuser:appuser release_dates.py .
+COPY --chown=appuser:appuser metrics_refresh.py .
 COPY --chown=appuser:appuser public/ ./public/
 
 # Create directory for metrics file

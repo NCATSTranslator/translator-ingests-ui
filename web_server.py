@@ -4,6 +4,8 @@ Web server for browsing and downloading S3 bucket contents.
 Run this on the EC2 instance to serve files via https://kgx-storage.ci.transltr.io
 """
 
+import threading
+
 import boto3
 import json
 import os
@@ -15,6 +17,8 @@ from botocore.exceptions import ClientError
 from pathlib import Path
 
 from metrics_path_rules import exclude_key_for_folder_modified_date
+from release_dates import DISPLAY_FORMAT, release_date_for_prefix
+from metrics_refresh import refresh_seconds, start_refresher
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
@@ -26,27 +30,56 @@ TRANSLATOR_KG_OPEN_PATH = "releases/translator_kg_open"
 
 # Load precomputed metrics
 _metrics_data = {}
+# Module state the loader replaces, not constants, which is how _metrics_data is kept too.
+# pylint: disable-next=invalid-name
+_metrics_computed_at: str | None = None
+# pylint: disable-next=invalid-name
+_metrics_mtime: float | None = None
+
+# Listing requests reload on their own thread, so one load at a time. Two loads running
+# together can publish in the order new data, old data, old mtime, new mtime, which leaves
+# the old metrics stored under the new file's mtime and nothing left to trigger a reload.
+_metrics_lock = threading.Lock()
 
 
 def load_metrics():
     """Load precomputed metrics from JSON file."""
-    global _metrics_data
+    global _metrics_data, _metrics_computed_at, _metrics_mtime
+    with _metrics_lock:
+        try:
+            if METRICS_FILE.exists():
+                with open(METRICS_FILE, "r") as f:
+                    data = json.load(f)
+                    # The mtime of the open file, not of the path: a refresh can replace the
+                    # file between the read and the stat, and the mtime of the one that
+                    # replaced it would make this stale copy look current forever.
+                    file_mtime = os.fstat(f.fileno()).st_mtime
+                    _metrics_data = data.get("metrics", {})
+                    _metrics_computed_at = data.get("computed_at")
+                    _metrics_mtime = file_mtime
+                    print(f"Loaded metrics for {len(_metrics_data)} folders "
+                          f"(computed at {data.get('computed_at', 'unknown')})")
+            else:
+                print(f"Warning: Metrics file not found at {METRICS_FILE}")
+                print("Run 'python compute_metrics.py' to generate metrics for faster performance")
+        except Exception as e:
+            print(f"Error loading metrics: {e}")
+            _metrics_data = {}
+
+
+def reload_metrics_if_changed():
+    """Reload metrics.json when something has rewritten it since the last load."""
     try:
-        if METRICS_FILE.exists():
-            with open(METRICS_FILE, "r") as f:
-                data = json.load(f)
-                _metrics_data = data.get("metrics", {})
-                print(f"Loaded metrics for {len(_metrics_data)} folders (computed at {data.get('computed_at', 'unknown')})")
-        else:
-            print(f"Warning: Metrics file not found at {METRICS_FILE}")
-            print("Run 'python compute_metrics.py' to generate metrics for faster performance")
-    except Exception as e:
-        print(f"Error loading metrics: {e}")
-        _metrics_data = {}
+        mtime = METRICS_FILE.stat().st_mtime
+    except OSError:
+        return
+    if mtime != _metrics_mtime:
+        load_metrics()
 
 
-# Load metrics on startup
+# Load metrics on startup, then keep them fresh in the background
 load_metrics()
+start_refresher(METRICS_FILE, refresh_seconds(os.environ))
 
 # Minimal HTML for 404 (file/prefix not found or reserved path)
 NOT_FOUND_HTML = (
@@ -85,9 +118,11 @@ def get_folder_stats(prefix):
 
     Falls back to live S3 API call if metrics not available.
     """
-    # Try precomputed metrics first
-    if prefix in _metrics_data:
-        return _metrics_data[prefix]
+    # Try precomputed metrics first. One read, not a membership test and an index:
+    # another request can reload the cache between the two and the index would raise.
+    cached = _metrics_data.get(prefix)
+    if cached is not None:
+        return cached
 
     # Fallback to live S3 API call (slow path)
     print(f"Warning: No precomputed metrics for {prefix}, falling back to S3 API")
@@ -110,17 +145,21 @@ def get_folder_stats(prefix):
                     latest_modified_display = lm
 
     chosen_modified = latest_modified_display or latest_modified_all
+    last_modified = chosen_modified.strftime(DISPLAY_FORMAT) if chosen_modified else "-"
 
     return {
         "size": total_size,
         "size_display": format_size(total_size),
         "file_count": file_count,
-        "modified": chosen_modified.strftime("%Y-%m-%d %H:%M") if chosen_modified else "-"
+        # A release folder reports the date its own metadata records, because
+        # re-uploading an unchanged release moves LastModified to the re-upload.
+        "modified": release_date_for_prefix(S3_CLIENT, BUCKET_NAME, prefix) or last_modified
     }
 
 
 def list_directory(prefix=""):
     """List contents of a directory (prefix) in S3."""
+    reload_metrics_if_changed()
     folders = []
     files = []
 
@@ -320,7 +359,12 @@ def health():
     try:
         # Simple check - verify S3 client exists and metrics are loaded
         if S3_CLIENT and len(_metrics_data) > 0:
-            return {"status": "healthy", "service": "kgx-storage", "metrics_loaded": len(_metrics_data)}, 200
+            return {
+                "status": "healthy",
+                "service": "kgx-storage",
+                "metrics_loaded": len(_metrics_data),
+                "metrics_computed_at": _metrics_computed_at,
+            }, 200
         else:
             return {"status": "healthy", "service": "kgx-storage"}, 200
     except Exception as e:
