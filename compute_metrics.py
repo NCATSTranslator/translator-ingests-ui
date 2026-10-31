@@ -184,9 +184,9 @@ def compute_all_metrics() -> dict[str, dict[str, object]]:
         "metrics": metrics
     }
 
-    # Save to JSON file (atomic write). The temporary file is named after this process: a run
-    # started by hand while cron is running one would otherwise write into the same temporary
-    # file, and the web server would read a half written one.
+    # Save to JSON file (atomic write). The temporary file is named after this process: two
+    # runs at once, say one started by hand while the post build run is going, would
+    # otherwise share a temporary file and the web server would read a half written one.
     temp_file = METRICS_FILE.with_name(f"{METRICS_FILE.name}.{os.getpid()}.tmp")
     try:
         with open(temp_file, "w") as f:

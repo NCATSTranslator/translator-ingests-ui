@@ -16,7 +16,7 @@ What the site does:
 - View JSON files in the browser with formatting.
 - A docs page with copy-paste commands for curl, wget, and AWS CLI.
 
-How it works: Your browser talks to Nginx over HTTPS. Nginx forwards to the Flask app. The Flask app talks to S3 with boto3. Folder sizes and file counts are precomputed into a file called `metrics.json` so pages load fast. You can run a cron job to refresh that file when new data is added.
+How it works: Your browser talks to Nginx over HTTPS. Nginx forwards to the Flask app. The Flask app talks to S3 with boto3. Folder sizes and file counts are precomputed into a file called `metrics.json` so pages load fast. Refresh that file by running `compute_metrics.py` after a pipeline build, which is the only time those numbers change.
 
 Important paths:
 - App lives at `/home/ubuntu/kgx-storage-webserver/`
@@ -26,7 +26,7 @@ Important paths:
 - The metrics cache is `metrics.json` in the app folder. The script `compute_metrics.py` creates it. The numbers only change when a build adds data to the bucket, so run the script after a build rather than on a timer. The server reloads `metrics.json` whenever its mtime changes, so whatever runs the script does not have to restart or signal the server.
 - A folder under `releases/<graph>/<version>/` shows the date the release itself records, read from `release-metadata.json` or `graph-metadata.json`. Every other folder shows the newest LastModified under it, which S3 resets on every upload.
 
-Setup in short: Clone the repo. Make a Python venv and install from requirements.txt. Run `sudo ./setup-webserver-service.sh`. Set up Nginx using the repo’s nginx-config. Run certbot for kgx-storage.ci.transltr.io. Run `compute_metrics.py` once so the site has folder stats. Optionally add a cron job for `update_metrics.sh`. The EC2 instance needs an IAM role that can read from S3, and the domain must point to the instance’s IP.
+Setup in short: Clone the repo. Make a Python venv and install from requirements.txt. Run `sudo ./setup-webserver-service.sh`. Set up Nginx using the repo’s nginx-config. Run certbot for kgx-storage.ci.transltr.io. Run `compute_metrics.py` once so the site has folder stats. Arrange for `update_metrics.sh` to run after each pipeline build. The EC2 instance needs an IAM role that can read from S3, and the domain must point to the instance’s IP.
 
 ## Overview
 
