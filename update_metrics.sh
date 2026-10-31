@@ -1,6 +1,7 @@
 #!/bin/bash
-# Update KGX Storage metrics and reload web server workers
-# Run hourly via cron to keep folder statistics fresh
+# Update KGX Storage metrics
+# Run this after a pipeline build has written to the bucket. The folder statistics only
+# change then, so a run on a clock rescans data that has not moved.
 
 cd /home/ubuntu/kgx-storage-webserver
 
@@ -15,7 +16,8 @@ else
   "$VENV_PY" -u compute_metrics.py >> "$METRICS_LOG" 2>&1
 fi
 
-# Reload gunicorn workers gracefully (HUP signal)
+# Reload gunicorn workers gracefully (HUP signal). Kept for older deployments only:
+# the web server now rereads metrics.json whenever its mtime changes.
 pkill -HUP -f "gunicorn.*web_server:app" 2>&1 | logger -t kgx-metrics
 
 if [ -t 1 ]; then

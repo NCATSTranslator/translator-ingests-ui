@@ -2,7 +2,8 @@
 """
 Precompute folder statistics for the KGX Storage web server.
 
-Run this script periodically (e.g., via cron every hour) to update folder metrics.
+Run this script after a pipeline build has written to the bucket. That is the only
+time the numbers change, so running it on a clock just rescans unchanged data.
 The web server reads metrics.json (always the latest successful run). Each run also
 writes a timestamped copy metrics-YYYYMMDD-HHMMSS.json and keeps the three newest
 snapshots; older snapshots are removed.

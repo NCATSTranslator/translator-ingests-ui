@@ -42,28 +42,42 @@ _metrics_lock = threading.Lock()
 
 
 def load_metrics():
-    """Load precomputed metrics from JSON file."""
+    """Load precomputed metrics, keeping the ones already loaded if the file cannot be read."""
     global _metrics_data, _metrics_computed_at, _metrics_mtime
     with _metrics_lock:
+        if not METRICS_FILE.exists():
+            print(f"Warning: Metrics file not found at {METRICS_FILE}")
+            print("Run 'python compute_metrics.py' to generate metrics for faster performance")
+            return
+
+        file_mtime: float | None = None
         try:
-            if METRICS_FILE.exists():
-                with open(METRICS_FILE, "r") as f:
-                    data = json.load(f)
-                    # The mtime of the open file, not of the path: compute_metrics.py can
-                    # replace the file between the read and the stat, and the mtime of the
-                    # one that replaced it would make this stale copy look current forever.
-                    file_mtime = os.fstat(f.fileno()).st_mtime
-                    _metrics_data = data.get("metrics", {})
-                    _metrics_computed_at = data.get("computed_at")
-                    _metrics_mtime = file_mtime
-                    print(f"Loaded metrics for {len(_metrics_data)} folders "
-                          f"(computed at {data.get('computed_at', 'unknown')})")
-            else:
-                print(f"Warning: Metrics file not found at {METRICS_FILE}")
-                print("Run 'python compute_metrics.py' to generate metrics for faster performance")
-        except Exception as e:
-            print(f"Error loading metrics: {e}")
-            _metrics_data = {}
+            with open(METRICS_FILE, "r") as f:
+                # The mtime of the open file, not of the path: compute_metrics.py can
+                # replace the file between the read and the stat, and the mtime of the
+                # one that replaced it would make this stale copy look current forever.
+                file_mtime = os.fstat(f.fileno()).st_mtime
+                data = json.load(f)
+            metrics = data["metrics"]
+            if not isinstance(metrics, dict):
+                raise TypeError(f'"metrics" is {type(metrics).__name__}, not an object')
+        # The ways a file can be unusable: gone or unreadable, not JSON, or JSON of the
+        # wrong shape. Anything else is a bug here and should not be swallowed.
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+            # Keep what is already loaded. An unusable file is no reason to serve from a
+            # live scan of every folder, and recording its mtime stops the next request
+            # reading the same bad file again. A later write has a new mtime and is read.
+            print(f"Error loading metrics: {error}. "
+                  f"Keeping the {len(_metrics_data)} folders already loaded")
+            if file_mtime is not None:
+                _metrics_mtime = file_mtime
+            return
+
+        _metrics_data = metrics
+        _metrics_computed_at = data.get("computed_at")
+        _metrics_mtime = file_mtime
+        print(f"Loaded metrics for {len(_metrics_data)} folders "
+              f"(computed at {data.get('computed_at', 'unknown')})")
 
 
 def reload_metrics_if_changed():

@@ -163,7 +163,7 @@ source .venv/bin/activate
 python compute_metrics.py
 ```
 
-This builds `metrics.json` with folder sizes and file counts. The web app reads this so it doesn’t have to ask S3 for every folder. Run it once after setup. You can also run `update_metrics.sh` from cron (for example every hour) to refresh it.
+This builds `metrics.json` with folder sizes and file counts. The web app reads this so it doesn’t have to ask S3 for every folder. Run it once after setup, and again after each pipeline build, which is the only time the numbers change. `update_metrics.sh` does that for you.
 
 ### 9. Check that it works
 
