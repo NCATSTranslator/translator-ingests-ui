@@ -18,7 +18,6 @@ from pathlib import Path
 
 from metrics_path_rules import exclude_key_for_folder_modified_date
 from release_dates import DISPLAY_FORMAT, release_date_for_prefix
-from metrics_refresh import refresh_seconds, start_refresher
 
 app = Flask(__name__)
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "kgx-translator-ingests")
@@ -33,53 +32,75 @@ _metrics_data = {}
 # Module state the loader replaces, not constants, which is how _metrics_data is kept too.
 # pylint: disable-next=invalid-name
 _metrics_computed_at: str | None = None
+# The mtime and size of the file the metrics above came from. Size is in it because an
+# mtime alone cannot always tell two writes apart, and a file that failed to load records
+# its signature too, so a good file replacing it has to look different from the bad one.
 # pylint: disable-next=invalid-name
-_metrics_mtime: float | None = None
+_metrics_signature: tuple[float, int] | None = None
 
 # Listing requests reload on their own thread, so one load at a time. Two loads running
-# together can publish in the order new data, old data, old mtime, new mtime, which leaves
-# the old metrics stored under the new file's mtime and nothing left to trigger a reload.
+# together can publish in the order new data, old data, old signature, new signature, which
+# leaves the old metrics stored under the new file's signature and nothing left to trigger
+# a reload.
 _metrics_lock = threading.Lock()
 
 
 def load_metrics():
-    """Load precomputed metrics from JSON file."""
-    global _metrics_data, _metrics_computed_at, _metrics_mtime
+    """Load precomputed metrics, keeping the ones already loaded if the file cannot be read."""
+    global _metrics_data, _metrics_computed_at, _metrics_signature
     with _metrics_lock:
+        signature: tuple[float, int] | None = None
         try:
-            if METRICS_FILE.exists():
-                with open(METRICS_FILE, "r") as f:
-                    data = json.load(f)
-                    # The mtime of the open file, not of the path: a refresh can replace the
-                    # file between the read and the stat, and the mtime of the one that
-                    # replaced it would make this stale copy look current forever.
-                    file_mtime = os.fstat(f.fileno()).st_mtime
-                    _metrics_data = data.get("metrics", {})
-                    _metrics_computed_at = data.get("computed_at")
-                    _metrics_mtime = file_mtime
-                    print(f"Loaded metrics for {len(_metrics_data)} folders "
-                          f"(computed at {data.get('computed_at', 'unknown')})")
-            else:
-                print(f"Warning: Metrics file not found at {METRICS_FILE}")
-                print("Run 'python compute_metrics.py' to generate metrics for faster performance")
-        except Exception as e:
-            print(f"Error loading metrics: {e}")
-            _metrics_data = {}
+            with open(METRICS_FILE, "r") as f:
+                # Stat the open file, not the path. compute_metrics.py replaces the file
+                # rather than rewriting it, so the path can already point at a different
+                # file, and storing that one's signature would make this copy look
+                # current forever.
+                status = os.fstat(f.fileno())
+                signature = (status.st_mtime, status.st_size)
+                data = json.load(f)
+            metrics = data["metrics"]
+            if not isinstance(metrics, dict):
+                raise TypeError(f'"metrics" is {type(metrics).__name__}, not an object')
+        except FileNotFoundError:
+            print(f"Warning: Metrics file not found at {METRICS_FILE}")
+            print("Run 'python compute_metrics.py' to generate metrics for faster performance")
+            return
+        # Every way this file can be unusable: unreadable (OSError), not decodable as UTF-8
+        # or not JSON (both ValueError), nested past the recursion limit (RecursionError),
+        # or JSON without a "metrics" object (KeyError, TypeError). load_metrics runs at
+        # import, so letting one of these through would stop a worker starting. Anything
+        # else is a bug in here and is not swallowed.
+        except (OSError, ValueError, RecursionError, KeyError, TypeError) as error:
+            # Keep what is already loaded. An unusable file is no reason to serve every
+            # folder from a live S3 scan, and recording its signature stops the next
+            # request reading the same bad file again.
+            print(f"Error loading metrics: {error}. "
+                  f"Keeping the {len(_metrics_data)} folders already loaded")
+            if signature is not None:
+                _metrics_signature = signature
+            return
+
+        _metrics_data = metrics
+        _metrics_computed_at = data.get("computed_at")
+        _metrics_signature = signature
+        print(f"Loaded metrics for {len(_metrics_data)} folders "
+              f"(computed at {data.get('computed_at', 'unknown')})")
 
 
 def reload_metrics_if_changed():
     """Reload metrics.json when something has rewritten it since the last load."""
     try:
-        mtime = METRICS_FILE.stat().st_mtime
+        status = METRICS_FILE.stat()
     except OSError:
         return
-    if mtime != _metrics_mtime:
+    if (status.st_mtime, status.st_size) != _metrics_signature:
         load_metrics()
 
 
-# Load metrics on startup, then keep them fresh in the background
+# Load metrics on startup. Whoever recomputes them replaces metrics.json, and the next
+# listing request picks the new file up, so nothing here has to recompute on a timer.
 load_metrics()
-start_refresher(METRICS_FILE, refresh_seconds(os.environ))
 
 # Minimal HTML for 404 (file/prefix not found or reserved path)
 NOT_FOUND_HTML = (

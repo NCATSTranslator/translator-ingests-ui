@@ -16,17 +16,17 @@ What the site does:
 - View JSON files in the browser with formatting.
 - A docs page with copy-paste commands for curl, wget, and AWS CLI.
 
-How it works: Your browser talks to Nginx over HTTPS. Nginx forwards to the Flask app. The Flask app talks to S3 with boto3. Folder sizes and file counts are precomputed into a file called `metrics.json` so pages load fast. You can run a cron job to refresh that file when new data is added.
+How it works: Your browser talks to Nginx over HTTPS. Nginx forwards to the Flask app. The Flask app talks to S3 with boto3. Folder sizes and file counts are precomputed into a file called `metrics.json` so pages load fast. Refresh that file by running `compute_metrics.py` after a pipeline build, which is the only time those numbers change.
 
 Important paths:
 - App lives at `/home/ubuntu/kgx-storage-webserver/`
 - Systemd service name is `kgx-storage-webserver`. Its config file is in the repo and gets copied to `/etc/systemd/system/`.
 - Logs: `/var/log/kgx-storage/` (access.log and error.log)
 - Nginx config: copy `nginx-config` from the repo to `/etc/nginx/sites-available/kgx-storage`
-- The metrics cache is `metrics.json` in the app folder. The script `compute_metrics.py` creates it. The server refreshes it by itself once it is older than six hours, and reloads it whenever it changes on disk, so no cron job is needed. Set `METRICS_REFRESH_SECONDS` to another number of seconds to refresh more or less often, or to `0` to turn it off and refresh it yourself with `update_metrics.sh` from cron.
+- The metrics cache is `metrics.json` in the app folder. The script `compute_metrics.py` creates it. The numbers only change when a build adds data to the bucket, so run the script after a build rather than on a timer. The server reloads `metrics.json` whenever its mtime changes, so whatever runs the script does not have to restart or signal the server.
 - A folder under `releases/<graph>/<version>/` shows the date the release itself records, read from `release-metadata.json` or `graph-metadata.json`. Every other folder shows the newest LastModified under it, which S3 resets on every upload.
 
-Setup in short: Clone the repo. Make a Python venv and install from requirements.txt. Run `sudo ./setup-webserver-service.sh`. Set up Nginx using the repo’s nginx-config. Run certbot for kgx-storage.ci.transltr.io. Run `compute_metrics.py` once so the site has folder stats. Optionally add a cron job for `update_metrics.sh`. The EC2 instance needs an IAM role that can read from S3, and the domain must point to the instance’s IP.
+Setup in short: Clone the repo. Make a Python venv and install from requirements.txt. Run `sudo ./setup-webserver-service.sh`. Set up Nginx using the repo’s nginx-config. Run certbot for kgx-storage.ci.transltr.io. Run `compute_metrics.py` once so the site has folder stats. Arrange for `update_metrics.sh` to run after each pipeline build. The EC2 instance needs an IAM role that can read from S3, and the domain must point to the instance’s IP.
 
 ## Overview
 
@@ -163,7 +163,7 @@ source .venv/bin/activate
 python compute_metrics.py
 ```
 
-This builds `metrics.json` with folder sizes and file counts. The web app reads this so it doesn’t have to ask S3 for every folder. Run it once after setup. You can also run `update_metrics.sh` from cron (for example every hour) to refresh it.
+This builds `metrics.json` with folder sizes and file counts. The web app reads this so it doesn’t have to ask S3 for every folder. Run it once after setup, and again after each pipeline build, which is the only time the numbers change. `update_metrics.sh` does that for you.
 
 ### 9. Check that it works
 
@@ -180,8 +180,7 @@ What’s in the repo:
 - `web_server.py` – Flask app. Routes, S3 calls, and the HTML for the browser, JSON viewer, and docs live here.
 - `compute_metrics.py` – Script that scans the bucket and writes folder stats to `metrics.json`.
 - `release_dates.py` – Reads the real date of a release from its metadata, so a re-upload does not change the date a release folder shows.
-- `metrics_refresh.py` – Background refresh of `metrics.json`, so the statistics stay current without a cron job. One worker refreshes at a time.
-- `update_metrics.sh` – Runs compute_metrics.py and sends HUP to Gunicorn so workers reload. Use in cron.
+- `update_metrics.sh` – Runs compute_metrics.py and sends HUP to Gunicorn. The HUP is no longer needed, because the server notices the new `metrics.json` by itself.
 - `metrics.json` – Created by compute_metrics.py. Not in git. Makes folder listing fast.
 - `requirements.txt` – Python dependencies (pinned versions).
 - `.python-version` – Says to use Python 3.12.3.
